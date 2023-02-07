@@ -1,0 +1,63 @@
+name: Deploy Static Content to S3 Bucket
+run-name: ${{ github.actor }} is deploying new version of the site 🚀
+on: 
+  push:
+    branches:
+      - "dev"
+      - "master"
+    paths:
+      - "front-end/**"
+      - ".github/workflows/deploy-static-content-to-s3.yaml"
+
+jobs:
+  static-content-building:
+    name: Build static content
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Setup Node environment
+        uses: actions/setup-node@v3
+        with:
+          node-version: 8
+      - name: Correcting ROOT_API value
+        uses: jacobtomlinson/gha-find-replace@v2
+        with:
+          regex: true
+          include: front-end/config/prod.env.js
+          find: "^\\s*ROOT_API:.*"
+          replace: "  ROOT_API: '\"${{ secrets.ROOT_API }}\"'"
+      - name: Build static content
+        run: cd front-end && npm install && npm run build
+      - name: Upload static content to artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: dist
+          path: front-end/dist/
+    
+  staging-deployment:
+    name: Deploy to stage
+    needs: static-content-building
+    if: github.ref_name == 'dev'
+    env:
+      STAGE_API: ${{ secrets.ROOT_API }}
+    runs-on: ubuntu-latest
+    container:
+      image: amazon/aws-cli:2.9.8
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: ${{ secrets.BUCKET_REGION }}
+    environment:
+      name: staging
+      url: ${{ env.STAGE_API }}
+    concurrency: staging
+    steps:
+      - name: Download statis content from artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: dist
+          path: /github/home/dist
+      - name: Upload statisc content to S3
+        run: aws s3 sync dist ${{ secrets.S3_BUCKET }} --delete
+        working-directory: /github/home/
